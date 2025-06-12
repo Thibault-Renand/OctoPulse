@@ -3,7 +3,7 @@ package com.example.myfirstapp
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.Dispatchers                   // ← Import ajouté
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -11,47 +11,66 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class PatientViewModel(app: Application) : AndroidViewModel(app) {
-    private val repo = PatientRepository(
-        AppDatabase.getInstance(app).patientDao()
-    )
+    private val dao = AppDatabase.getInstance(app).patientDao()
+    private val repo = PatientRepository(dao)
 
-    /** Flux de tous les patients en base */
+    /** Flux de tous les patients en base, démarré _tout de suite_ */
     val patients: StateFlow<List<Patient>> =
         repo.patientsFlow
-            .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+            .stateIn(viewModelScope,
+                SharingStarted.Eagerly,
+                emptyList())
 
     init {
-        viewModelScope.launch(Dispatchers.IO) {   // ← Passe sur IO
-            val existing = repo.patientsFlow.first()
-            if (existing.isEmpty()) {
-                repo.save(
+        viewModelScope.launch(Dispatchers.IO) {
+            if (repo.patientsFlow.first().isEmpty()) {
+                listOf(
                     Patient(
                         nom = "Dupont",
                         prenom = "Alice",
                         texture = TextureRepas.NORMAL,
                         allergies = listOf("Lait"),
                         regime = RegimeType.VEGETARIEN
-                    )
-                )
-                repo.save(
+                    ),
                     Patient(
                         nom = "Martin",
                         prenom = "Bob",
                         texture = TextureRepas.HACHE,
                         allergies = emptyList(),
                         regime = RegimeType.HALAL
+                    ),
+                    Patient(
+                        nom = "Durand",
+                        prenom = "Claire",
+                        texture = TextureRepas.MIXE,
+                        allergies = listOf("Gluten", "Fruits à coque"),
+                        regime = RegimeType.STANDARD
+                    ),
+                    Patient(
+                        nom = "Bernard",
+                        prenom = "David",
+                        texture = TextureRepas.NORMAL,
+                        allergies = listOf("Poisson"),
+                        regime = RegimeType.VEGETARIEN
+                    ),
+                    Patient(
+                        nom = "Petit",
+                        prenom = "Emma",
+                        texture = TextureRepas.HACHE,
+                        allergies = emptyList(),
+                        regime = RegimeType.STANDARD
                     )
-                )
+                ).forEach { repo.save(it) }
             }
         }
     }
 
-    /** Sauvegarde en arrière-plan */
+    /** Sauvegarde un patient (insert/replace) */
     fun save(patient: Patient) = viewModelScope.launch(Dispatchers.IO) {
         repo.save(patient)
     }
 
-    /** Supprime en arrière-plan */
+    /** Supprime un patient */
     fun delete(patient: Patient) = viewModelScope.launch(Dispatchers.IO) {
         repo.delete(patient)
     }
