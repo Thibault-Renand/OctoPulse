@@ -1,115 +1,217 @@
 package com.example.myfirstapp
 
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.myfirstapp.ui.theme.MyFirstAppTheme
 
 class MainActivity : ComponentActivity() {
-    // Pour l'instant on fixe priority à 0
-    private val priority: Int = 1
+    // 1 = personnel non soignant (vue seule)
+    // 2 = aide-soignante (incrémenter seulement + mixé)
+    // 3 = infirmières (modifier tout sauf nom/prénom)
+    private val priority: Int = 3
+    private val vm: PatientViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MyFirstAppTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    // Condition principale
-                    if (priority == 0) {
-                        EatHereScreen()
-                    } else {
-                        GestionnaireRepasScreen()
+                Surface(Modifier.fillMaxSize()) {
+                    GestionnaireRepasScreen(vm, priority)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun GestionnaireRepasScreen(vm: PatientViewModel, priority: Int) {
+    val patients by vm.patients.collectAsState()
+    var selectedId by remember { mutableStateOf<Long?>(null) }
+
+    Row(Modifier.fillMaxSize()) {
+        LazyColumn(
+            Modifier
+                .weight(1f)
+                .padding(8.dp)
+        ) {
+            items(patients) { p ->
+                Card(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(4.dp)
+                        .clickable { selectedId = p.id }
+                ) {
+                    Column(Modifier.padding(8.dp)) {
+                        Text("${p.nom} ${p.prenom}")
+                        Text("Texture : ${p.texture}")
+                        Text("Régime : ${p.regime}")
                     }
                 }
             }
         }
+
+        val patient = patients.find { it.id == selectedId }
+        patient?.let {
+            PatientDetailPanel(
+                patient = it,
+                priority = priority,
+                onSave = { updated ->
+                    vm.save(updated)
+                    selectedId = updated.id
+                }
+            )
+        }
     }
 }
 
 @Composable
-fun EatHereScreen() {
-    var showDialog by remember { mutableStateOf(false) }
-    val context = LocalContext.current
+fun PatientDetailPanel(
+    patient: Patient,
+    priority: Int,
+    onSave: (Patient) -> Unit
+) {
+    var texture by remember { mutableStateOf(patient.texture) }
+    var regime by remember { mutableStateOf(patient.regime) }
+    var allergies by remember { mutableStateOf(patient.allergies.joinToString(", ")) }
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
+        Modifier
+            .fillMaxHeight()
+            .width(300.dp)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(
-            text = "Souhaitez-vous manger sur place ?",
-            style = MaterialTheme.typography.headlineMedium
-        )
-        Spacer(modifier = Modifier.height(32.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Button(
-                onClick = { showDialog = true },
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("Oui")
+        Text("Détails du patient", style = MaterialTheme.typography.headlineSmall)
+
+        when (priority) {
+            1 -> {
+                // Lecture seule
+                Text("Nom : ${patient.nom}")
+                Text("Prénom : ${patient.prenom}")
+                Text("Texture : ${patient.texture}")
+                Text("Régime : ${patient.regime}")
+                Text("Allergies : ${patient.allergies.joinToString(", ")}")
             }
-            OutlinedButton(
-                onClick = { /* gérer le Non ici */ },
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("Non")
+            2 -> {
+                // Aide-soignante : incrémentation seule vers plus mixé
+                Text("Nom : ${patient.nom}")
+                Text("Prénom : ${patient.prenom}")
+
+                Text("Texture : $texture")
+                Button(onClick = {
+                    texture = when (texture) {
+                        TextureRepas.NORMAL -> TextureRepas.HACHE
+                        TextureRepas.HACHE  -> TextureRepas.MIXE
+                        TextureRepas.MIXE   -> TextureRepas.MIXE
+                    }
+                    onSave(patient.copy(texture = texture, regime = patient.regime, allergies = patient.allergies))
+                }) {
+                    Text("+ mixé")
+                }
+
+                // Affichage en lecture seule du reste
+                Text("Régime : ${patient.regime}")
+                Text("Allergies : ${patient.allergies.joinToString(", ")}")
+            }
+            3 -> {
+                // Infirmières : tout modifier sauf nom/prénom
+                Text("Nom : ${patient.nom}")
+                Text("Prénom : ${patient.prenom}")
+
+                // Texture modifiable
+                Text("Texture : $texture")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
+                        texture = when (texture) {
+                            TextureRepas.NORMAL -> TextureRepas.HACHE
+                            TextureRepas.HACHE  -> TextureRepas.MIXE
+                            TextureRepas.MIXE   -> TextureRepas.MIXE
+                        }
+                    }) { Text("+ mixé") }
+                    Button(onClick = {
+                        texture = when (texture) {
+                            TextureRepas.MIXE   -> TextureRepas.HACHE
+                            TextureRepas.HACHE  -> TextureRepas.NORMAL
+                            TextureRepas.NORMAL -> TextureRepas.NORMAL
+                        }
+                    }) { Text("− mixé") }
+                }
+
+                // Régime modifiable via dropdown
+                DropdownMenuBox(
+                    label = "Régime",
+                    options = RegimeType.values().toList(),
+                    selected = regime,
+                    onSelected = { regime = it }
+                )
+
+                // Allergies modifiables
+                OutlinedTextField(
+                    value = allergies,
+                    onValueChange = { allergies = it },
+                    label = { Text("Allergies (séparées par ,)") }
+                )
+
+                // Bouton Enregistrer
+                Button(onClick = {
+                    onSave(
+                        patient.copy(
+                            texture = texture,
+                            regime = regime,
+                            allergies = allergies.split(",").map(String::trim)
+                        )
+                    )
+                }) {
+                    Text("Enregistrer")
+                }
             }
         }
     }
+}
 
-    if (showDialog) {
-        AlertDialog(
-            onDismissRequest = { showDialog = false },
-            title = { Text("Confirmation") },
-            text = { Text("Vous avez choisi de manger sur place.") },
-            confirmButton = {
-                TextButton(onClick = { showDialog = false }) {
-                    Text("OK")
-                }
+@Composable
+fun <T> DropdownMenuBox(
+    label: String,
+    options: List<T>,
+    selected: T,
+    onSelected: (T) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedTextField(
+            value = selected.toString(),
+            onValueChange = {},
+            label = { Text(label) },
+            readOnly = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = true }
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            options.forEach { opt ->
+                DropdownMenuItem(
+                    text = { Text(opt.toString()) },
+                    onClick = {
+                        onSelected(opt)
+                        expanded = false
+                    }
+                )
             }
-        )
-    }
-}
-
-@Composable
-fun GestionnaireRepasScreen() {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = "Gestionnaire repas",
-            style = MaterialTheme.typography.headlineMedium
-        )
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun EatHerePreview() {
-    MyFirstAppTheme {
-        EatHereScreen()
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun GestionnaireRepasPreview() {
-    MyFirstAppTheme {
-        GestionnaireRepasScreen()
+        }
     }
 }
