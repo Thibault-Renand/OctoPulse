@@ -1,27 +1,25 @@
 @file:OptIn(ExperimentalMaterial3Api::class)
-package com.example.mealmanagementapp
+package com.example.myfirstapp
 
 import android.app.Application
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -30,24 +28,29 @@ import androidx.lifecycle.viewModelScope
 import androidx.activity.viewModels
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import io.ktor.client.*
-import io.ktor.client.engine.android.* // <-- CORRECTION 1: Utiliser le moteur Android
+import io.ktor.client.engine.android.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.call.body
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
 import java.util.UUID
 
-// --- 1. Data Models (Doivent correspondre à ceux du backend) ---
+// --- Constantes pour la Découverte ---
+const val DISCOVERY_PORT = 9999
+const val DISCOVERY_KEYWORD = "poulpe"
+const val EMULATOR_FALLBACK_IP = "10.0.2.2"
+
+// --- 1. Data Models ---
 @Serializable
 data class Resident(
     val id: String = "",
@@ -74,84 +77,117 @@ data class MealRecord(
     val name: String,
     val firstName: String,
     val mealConfirmed: Boolean,
-    val date: String, // Le backend gérera la date, on peut l'envoyer vide
+    val date: String,
     val allergies: List<String> = emptyList(),
     val mealTexture: String = "normal",
     val mealType: String = "aucun"
 )
 
 
-// --- 2. Data Repository (Communique avec le backend Ktor) ---
+// --- 2. Data Repository ---
 class DataRepository {
-    private val client = HttpClient(Android) { // <-- CORRECTION 2: Utiliser le moteur Android
-        install(ContentNegotiation) {
-            json()
-        }
+    private val client = HttpClient(Android) {
+        install(ContentNegotiation) { json() }
+    }
+    private var baseUrl: String? = null
+
+    fun setBaseUrl(ip: String) {
+        baseUrl = "http://$ip:8080"
     }
 
-    // Utilise 10.0.2.2 pour que l'émulateur Android puisse se connecter au localhost du PC
-    private val baseUrl = "http://10.0.2.2:8080"
+    /**
+     * Tente de découvrir le serveur sur le réseau via UDP.
+     */
+    suspend fun discoverServer(): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                DatagramSocket().use { socket ->
+                    socket.broadcast = true
+                    socket.soTimeout = 3000 // Attend 3 secondes max
 
-    suspend fun getResidents(): List<Resident> = try { client.get("$baseUrl/residents").body() } catch (e: Exception) { println("Error fetching residents: ${e.message}"); emptyList() }
-    suspend fun getStaff(): List<Staff> = try { client.get("$baseUrl/staff").body() } catch (e: Exception) { println("Error fetching staff: ${e.message}"); emptyList() }
-    suspend fun getTodaysMealRecords(): List<MealRecord> = try { client.get("$baseUrl/meals/today").body() } catch (e: Exception) { println("Error fetching meals: ${e.message}"); emptyList() }
+                    val sendData = DISCOVERY_KEYWORD.toByteArray()
+                    // Adresse de broadcast pour le réseau local
+                    val broadcastAddress = InetAddress.getByName("255.255.255.255")
+                    val sendPacket = DatagramPacket(sendData, sendData.size, broadcastAddress, DISCOVERY_PORT)
+                    socket.send(sendPacket)
 
-    suspend fun confirmMeal(record: MealRecord) {
-        try {
-            client.post("$baseUrl/meals") {
-                contentType(ContentType.Application.Json)
-                setBody(record)
-            }
-        } catch (e: Exception) {
-            println("Error confirming meal: ${e.message}")
-        }
-    }
+                    println("Discovery request sent.")
 
-    suspend fun addOrUpdateResident(resident: Resident) {
-        try {
-            if (resident.id.startsWith("resident-")) { // Existing
-                client.put("$baseUrl/residents/${resident.id}") {
-                    contentType(ContentType.Application.Json)
-                    setBody(resident)
+                    val receiveBuffer = ByteArray(1024)
+                    val receivePacket = DatagramPacket(receiveBuffer, receiveBuffer.size)
+                    socket.receive(receivePacket)
+
+                    val serverIp = String(receivePacket.data, 0, receivePacket.length)
+                    println("Server found via discovery: $serverIp")
+                    serverIp
                 }
-            } else { // New
-                client.post("$baseUrl/residents") {
-                    contentType(ContentType.Application.Json)
-                    setBody(resident)
-                }
+            } catch (e: Exception) {
+                println("Discovery failed: ${e.message}")
+                null
             }
+        }
+    }
+
+    private suspend inline fun <T> safeApiCall(call: () -> T): T? {
+        if (baseUrl == null) {
+            println("Cannot make API call: server IP is not set.")
+            return null
+        }
+        return try {
+            call()
         } catch (e: Exception) {
-            println("Error adding/updating resident: ${e.message}")
+            println("API call failed: ${e.message}")
+            null
         }
     }
 
-    suspend fun deleteResident(id: String) {
-        try {
-            client.delete("$baseUrl/residents/$id")
-        } catch(e: Exception) {
-            println("Error deleting resident: ${e.message}")
+    suspend fun getResidents(): List<Resident> = safeApiCall { client.get("$baseUrl/residents").body() } ?: emptyList()
+    suspend fun getStaff(): List<Staff> = safeApiCall { client.get("$baseUrl/staff").body() } ?: emptyList()
+    suspend fun getTodaysMealRecords(): List<MealRecord> = safeApiCall { client.get("$baseUrl/meals/today").body() } ?: emptyList()
+
+    suspend fun confirmMeal(record: MealRecord) = safeApiCall {
+        client.post("$baseUrl/meals") {
+            contentType(ContentType.Application.Json)
+            setBody(record)
         }
     }
 
-    suspend fun updateResident(id: String, resident: Resident) {
-        try {
-            client.put("$baseUrl/residents/$id") {
+    suspend fun addOrUpdateResident(resident: Resident) = safeApiCall {
+        if (resident.id.startsWith("resident-")) {
+            client.put("$baseUrl/residents/${resident.id}") {
                 contentType(ContentType.Application.Json)
                 setBody(resident)
             }
-        } catch (e: Exception) {
-            println("Error updating resident: ${e.message}")
+        } else {
+            client.post("$baseUrl/residents") {
+                contentType(ContentType.Application.Json)
+                setBody(resident)
+            }
+        }
+    }
+
+    suspend fun deleteResident(id: String) = safeApiCall { client.delete("$baseUrl/residents/$id") }
+    suspend fun updateResident(id: String, resident: Resident) = safeApiCall {
+        client.put("$baseUrl/residents/$id") {
+            contentType(ContentType.Application.Json)
+            setBody(resident)
         }
     }
 }
 
-
 // --- 3. ViewModel ---
+sealed class ServerState {
+    object Searching : ServerState()
+    data class Connected(val ip: String, val method: String) : ServerState()
+    object Error : ServerState()
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = DataRepository()
     private val screenHistory = mutableStateListOf<String>()
 
+    val serverState = MutableStateFlow<ServerState>(ServerState.Searching)
     val priorityId = MutableStateFlow<Int?>(null)
     val currentScreen = MutableStateFlow("home")
     val residents = MutableStateFlow<List<Resident>>(emptyList())
@@ -168,7 +204,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
 
     init {
-        fetchAllData()
+        initializeConnection()
+    }
+
+    fun initializeConnection() {
+        serverState.value = ServerState.Searching
+        viewModelScope.launch {
+            // Tentative 1: Découverte automatique
+            var foundIp = repository.discoverServer()
+            var connectionMethod = "Découverte automatique"
+
+            // Tentative 2: Secours pour l'émulateur
+            if (foundIp == null) {
+                println("Discovery failed. Trying fallback for emulator...")
+                connectionMethod = "Secours (IP fixe)"
+                repository.setBaseUrl(EMULATOR_FALLBACK_IP)
+                // On teste si la connexion de secours fonctionne en récupérant une donnée
+                if (repository.getStaff().isNotEmpty()) {
+                    foundIp = EMULATOR_FALLBACK_IP
+                } /*else {
+                    repository.setBaseUrl(null) // Reset si ça ne marche pas non plus
+                }*/
+            } else {
+                repository.setBaseUrl(foundIp)
+            }
+
+            // Mise à jour de l'UI
+            if (foundIp != null) {
+                serverState.value = ServerState.Connected(foundIp, connectionMethod)
+                fetchAllData()
+            } else {
+                serverState.value = ServerState.Error
+            }
+        }
     }
 
     private fun fetchAllData() {
@@ -206,7 +274,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissConfirmDialog() { showConfirmDialog.value = null }
     fun onConfirm() {
-        onConfirmAction()app
+        onConfirmAction()
         dismissConfirmDialog()
     }
 
@@ -298,6 +366,47 @@ class MainActivity : ComponentActivity() {
 // --- 5. UI Composables ---
 @Composable
 fun AppContent(viewModel: MainViewModel) {
+    val serverState by viewModel.serverState.collectAsState()
+
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        when (val state = serverState) {
+            is ServerState.Searching -> {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Spacer(Modifier.height(16.dp))
+                        Text("Recherche du serveur sur le réseau...")
+                    }
+                }
+            }
+            is ServerState.Connected -> {
+                // Toast.makeText(LocalContext.current, "Connecté via ${state.method}", Toast.LENGTH_SHORT).show()
+                MainAppNavigation(viewModel)
+            }
+            is ServerState.Error -> {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Warning, contentDescription = "Error", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(64.dp))
+                        Spacer(Modifier.height(16.dp))
+                        Text("Serveur introuvable", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.error)
+                        Text(
+                            "Veuillez vérifier que le serveur est bien lancé sur le même réseau Wi-Fi.",
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                        Button(onClick = { viewModel.initializeConnection() }, modifier = Modifier.padding(top = 24.dp)) {
+                            Text("Réessayer")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+@Composable
+fun MainAppNavigation(viewModel: MainViewModel) {
     val currentScreen by viewModel.currentScreen.collectAsState()
     val context = LocalContext.current
 
@@ -316,17 +425,17 @@ fun AppContent(viewModel: MainViewModel) {
         )
     }
 
-    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        when (currentScreen) {
-            "home" -> AppEntryScreen(viewModel)
-            "resident_confirmation" -> ResidentMealConfirmationScreen(viewModel)
-            "dashboard" -> DashboardScreen(viewModel)
-            "mymeal" -> MyMealStaffScreen(viewModel)
-            "meal_manager" -> MealManagerScreen(viewModel)
-            "meal_summary" -> MealSummaryScreen(viewModel)
-        }
+    when (currentScreen) {
+        "home" -> AppEntryScreen(viewModel)
+        "resident_confirmation" -> ResidentMealConfirmationScreen(viewModel)
+        "dashboard" -> DashboardScreen(viewModel)
+        "mymeal" -> MyMealStaffScreen(viewModel)
+        "meal_manager" -> MealManagerScreen(viewModel)
+        "meal_summary" -> MealSummaryScreen(viewModel)
+        else -> AppEntryScreen(viewModel)
     }
 }
+
 
 @Composable fun TopBar(title: String, onBackClick: () -> Unit) {
     TopAppBar(
