@@ -206,7 +206,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissConfirmDialog() { showConfirmDialog.value = null }
     fun onConfirm() {
-        onConfirmAction()
+        onConfirmAction()app
         dismissConfirmDialog()
     }
 
