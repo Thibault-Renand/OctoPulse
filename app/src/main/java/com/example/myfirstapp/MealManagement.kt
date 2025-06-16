@@ -2,7 +2,6 @@
 package com.example.mealmanagementapp
 
 import android.app.Application
-import android.content.Context
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -11,7 +10,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -32,277 +30,158 @@ import androidx.lifecycle.viewModelScope
 import androidx.activity.viewModels
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
-
-import com.google.firebase.FirebaseApp
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.ktx.auth
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.SetOptions
-import com.google.firebase.firestore.ktx.firestore
-import com.google.firebase.ktx.Firebase
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+import io.ktor.client.*
+import io.ktor.client.engine.android.* // <-- CORRECTION 1: Utiliser le moteur Android
+import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.request.*
+import io.ktor.client.call.body
+import io.ktor.http.*
+import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.UUID
 
-// --- 1. Data Models ---
+// --- 1. Data Models (Doivent correspondre à ceux du backend) ---
+@Serializable
 data class Resident(
     val id: String = "",
     val name: String = "",
     val firstName: String = "",
     val allergies: List<String> = emptyList(),
-    val mealTexture: String = "normal", // "normal", "haché", "mixé"
-    val mealType: String = "aucun",     // "aucun", "vegetarien", "vegan", "hypocalorique", "hypercalorique"
-    val linkedUserId: String? = null,
-    val lastModified: Date = Date()
+    val mealTexture: String = "normal",
+    val mealType: String = "aucun"
 )
 
+@Serializable
 data class Staff(
     val id: String = "",
     val name: String = "",
     val firstName: String = "",
-    val role: String = "Visiteur", // "Soignant", "Personnel", "Visiteur"
-    val linkedUserId: String? = null,
-    val lastModified: Date = Date()
+    val role: String = "Visiteur"
 )
 
+@Serializable
 data class MealRecord(
-    val id: String = "",
-    val personId: String = "",
-    val personType: String = "resident", // "resident" or "staff"
-    val name: String = "",
-    val firstName: String = "",
-    val mealConfirmed: Boolean = false,
-    val date: String = "", // Format yyyy-MM-dd
-    // Resident-specific fields
+    val id: Int = 0,
+    val personId: String,
+    val personType: String,
+    val name: String,
+    val firstName: String,
+    val mealConfirmed: Boolean,
+    val date: String, // Le backend gérera la date, on peut l'envoyer vide
     val allergies: List<String> = emptyList(),
     val mealTexture: String = "normal",
-    val mealType: String = "aucun",
-    val timestamp: Date = Date()
+    val mealType: String = "aucun"
 )
 
-// --- 2. FirestoreManager ---
-class FirestoreManager(private val appId: String, private val context: Context) {
 
-    private lateinit var db: FirebaseFirestore
-    private lateinit var auth: FirebaseAuth
-
-    private val _residents = MutableStateFlow<List<Resident>>(emptyList())
-    val residents: StateFlow<List<Resident>> = _residents.asStateFlow()
-
-    private val _staff = MutableStateFlow<List<Staff>>(emptyList())
-    val staff: StateFlow<List<Staff>> = _staff.asStateFlow()
-
-    private val _todaysMealRecords = MutableStateFlow<List<MealRecord>>(emptyList())
-    val todaysMealRecords: StateFlow<List<MealRecord>> = _todaysMealRecords.asStateFlow()
-
-    init {
-        initializeFirebase()
-    }
-
-    private fun initializeFirebase() {
-        if (FirebaseApp.getApps(context).isEmpty()) {
-            FirebaseApp.initializeApp(context)
+// --- 2. Data Repository (Communique avec le backend Ktor) ---
+class DataRepository {
+    private val client = HttpClient(Android) { // <-- CORRECTION 2: Utiliser le moteur Android
+        install(ContentNegotiation) {
+            json()
         }
-        db = Firebase.firestore
-        auth = Firebase.auth
     }
 
-    suspend fun signIn(initialAuthToken: String?) {
+    // Utilise 10.0.2.2 pour que l'émulateur Android puisse se connecter au localhost du PC
+    private val baseUrl = "http://10.0.2.2:8080"
+
+    suspend fun getResidents(): List<Resident> = try { client.get("$baseUrl/residents").body() } catch (e: Exception) { println("Error fetching residents: ${e.message}"); emptyList() }
+    suspend fun getStaff(): List<Staff> = try { client.get("$baseUrl/staff").body() } catch (e: Exception) { println("Error fetching staff: ${e.message}"); emptyList() }
+    suspend fun getTodaysMealRecords(): List<MealRecord> = try { client.get("$baseUrl/meals/today").body() } catch (e: Exception) { println("Error fetching meals: ${e.message}"); emptyList() }
+
+    suspend fun confirmMeal(record: MealRecord) {
         try {
-            auth.signInAnonymously().await()
-            println("Authentication successful. User ID: ${auth.currentUser?.uid}")
-        } catch (e: Exception) {
-            println("Authentication error: ${e.message}")
-        }
-    }
-
-    fun startListeners() {
-        db.collection("artifacts/${appId}/public/data/residents").addSnapshotListener { snapshot, e ->
-            if (e != null) return@addSnapshotListener
-            _residents.value = snapshot?.documents?.mapNotNull { it.toObject(Resident::class.java)?.copy(id = it.id) } ?: emptyList()
-        }
-
-        db.collection("artifacts/${appId}/public/data/staff").addSnapshotListener { snapshot, e ->
-            if (e != null) return@addSnapshotListener
-            _staff.value = snapshot?.documents?.mapNotNull { it.toObject(Staff::class.java)?.copy(id = it.id) } ?: emptyList()
-        }
-
-        val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-        db.collection("artifacts/${appId}/public/data/meals").whereEqualTo("date", today).addSnapshotListener { snapshot, e ->
-            if (e != null) return@addSnapshotListener
-            _todaysMealRecords.value = snapshot?.documents?.mapNotNull { it.toObject(MealRecord::class.java)?.copy(id = it.id) } ?: emptyList()
-        }
-    }
-
-    suspend fun populateInitialData() {
-        val residentsCollection = db.collection("artifacts/${appId}/public/data/residents")
-        val staffCollection = db.collection("artifacts/${appId}/public/data/staff")
-        if (residentsCollection.get().await().isEmpty) {
-            listOf(
-                Resident(id = "resident-01", name = "Renand", firstName = "Thibault", allergies = listOf("lactose"), mealType = "aucun", linkedUserId = "user-thibault"),
-                Resident(id = "resident-02", name = "Dupont", firstName = "Marie", allergies = listOf("gluten"), mealTexture = "haché", mealType = "vegetarien"),
-                Resident(id = "resident-03", name = "Lefevre", firstName = "Pierre", mealTexture = "mixé", mealType = "hypocalorique"),
-                Resident(id = "resident-04", name = "Martin", firstName = "Sophie", allergies = listOf("noix", "poisson"), mealType = "aucun"),
-                Resident(id = "resident-05", name = "Bernard", firstName = "Luc", allergies = emptyList(), mealType = "vegan"),
-                Resident(id = "resident-06", name = "Garcia", firstName = "Eva", allergies = listOf("gluten"), mealTexture = "normal", mealType = "vegetarien")
-            ).forEach { residentsCollection.document(it.id).set(it).await() }
-        }
-        if (staffCollection.get().await().isEmpty) {
-            listOf(
-                Staff(id = "staff-01", name = "Durand", firstName = "Alain", role = "Soignant", linkedUserId = "user-alain"),
-                Staff(id = "staff-02", name = "Petit", firstName = "Carole", role = "Personnel", linkedUserId = "user-carole"),
-                Staff(id = "staff-03", name = "Moreau", firstName = "Julien", role = "Visiteur"),
-            ).forEach { staffCollection.document(it.id).set(it).await() }
-        }
-    }
-
-    private suspend fun confirmMeal(record: MealRecord): Boolean {
-        val date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-        val collection = db.collection("artifacts/${appId}/public/data/meals")
-        val query = collection.whereEqualTo("personId", record.personId).whereEqualTo("date", date)
-
-        return try {
-            val existing = query.get().await()
-            if (existing.isEmpty) {
-                collection.add(record).await()
-            } else {
-                collection.document(existing.documents.first().id).update("mealConfirmed", record.mealConfirmed, "timestamp", Date()).await()
+            client.post("$baseUrl/meals") {
+                contentType(ContentType.Application.Json)
+                setBody(record)
             }
-            Toast.makeText(context, "Confirmation enregistrée.", Toast.LENGTH_SHORT).show()
-            true
         } catch (e: Exception) {
-            Toast.makeText(context, "Erreur: ${e.message}", Toast.LENGTH_SHORT).show()
-            false
+            println("Error confirming meal: ${e.message}")
         }
     }
 
-    suspend fun confirmResidentMeal(resident: Resident, eatOnSite: Boolean): Boolean {
-        return confirmMeal(MealRecord(
-            personId = resident.id,
-            personType = "resident",
-            name = resident.name,
-            firstName = resident.firstName,
-            mealConfirmed = eatOnSite,
-            date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()),
-            allergies = resident.allergies,
-            mealTexture = resident.mealTexture,
-            mealType = resident.mealType
-        ))
-    }
-
-    suspend fun confirmStaffMeal(staff: Staff, eatOnSite: Boolean): Boolean {
-        return confirmMeal(MealRecord(
-            personId = staff.id,
-            personType = "staff",
-            name = staff.name,
-            firstName = staff.firstName,
-            mealConfirmed = eatOnSite,
-            date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()),
-        ))
-    }
-
-    suspend fun addOrUpdateResident(resident: Resident): Boolean {
-        return try {
-            db.collection("artifacts/${appId}/public/data/residents").document(resident.id).set(resident, SetOptions.merge()).await()
-            true
-        } catch (e: Exception) { false }
-    }
-
-    suspend fun deleteResident(residentId: String): Boolean {
-        return try {
-            db.collection("artifacts/${appId}/public/data/residents").document(residentId).delete().await()
-            true
-        } catch (e: Exception) { false }
-    }
-
-    suspend fun updateResidentTexture(residentId: String, newTexture: String): Boolean {
-        return try {
-            db.collection("artifacts/${appId}/public/data/residents").document(residentId).update("mealTexture", newTexture).await()
-            true
-        } catch (e: Exception) { false }
-    }
-
-    fun getMealSummary(): Map<String, Any> {
-        val absentResidentIds = todaysMealRecords.value.filter { it.personType == "resident" && !it.mealConfirmed }.map { it.personId }.toSet()
-        val presentResidents = _residents.value.filter { it.id !in absentResidentIds }
-        val absentResidents = _residents.value.filter { it.id in absentResidentIds }
-
-        val presentStaffCount = todaysMealRecords.value.count { it.personType == "staff" && it.mealConfirmed }
-
-        val normalMeals = presentResidents
-            .filter { it.mealType == "aucun" && it.allergies.isEmpty() }
-            .groupBy { it.mealTexture }
-            .mapValues { it.value.size }
-
-        val specialMeals = presentResidents
-            .filter { it.mealType != "aucun" || it.allergies.isNotEmpty() }
-            .groupBy { it.mealType.uppercase() } // Group 1: Régime
-            .mapValues { mealTypeEntry ->
-                mealTypeEntry.value
-                    .groupBy { it.allergies.sorted().joinToString(", ").ifEmpty { "Aucune" } } // Group 2: Allergies
-                    .mapValues { allergyEntry ->
-                        allergyEntry.value
-                            .groupBy { it.mealTexture } // Group 3: Texture
-                            .mapValues { it.value.size }
-                    }
+    suspend fun addOrUpdateResident(resident: Resident) {
+        try {
+            if (resident.id.startsWith("resident-")) { // Existing
+                client.put("$baseUrl/residents/${resident.id}") {
+                    contentType(ContentType.Application.Json)
+                    setBody(resident)
+                }
+            } else { // New
+                client.post("$baseUrl/residents") {
+                    contentType(ContentType.Application.Json)
+                    setBody(resident)
+                }
             }
+        } catch (e: Exception) {
+            println("Error adding/updating resident: ${e.message}")
+        }
+    }
 
-        return mapOf(
-            "absentResidents" to absentResidents,
-            "presentStaffCount" to presentStaffCount,
-            "normalMeals" to normalMeals,
-            "specialMeals" to specialMeals
-        )
+    suspend fun deleteResident(id: String) {
+        try {
+            client.delete("$baseUrl/residents/$id")
+        } catch(e: Exception) {
+            println("Error deleting resident: ${e.message}")
+        }
+    }
+
+    suspend fun updateResident(id: String, resident: Resident) {
+        try {
+            client.put("$baseUrl/residents/$id") {
+                contentType(ContentType.Application.Json)
+                setBody(resident)
+            }
+        } catch (e: Exception) {
+            println("Error updating resident: ${e.message}")
+        }
     }
 }
+
 
 // --- 3. ViewModel ---
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val firestoreManager = FirestoreManager("mealmanager-45be6", application.applicationContext)
+    private val repository = DataRepository()
     private val screenHistory = mutableStateListOf<String>()
 
     val priorityId = MutableStateFlow<Int?>(null)
     val currentScreen = MutableStateFlow("home")
-    val residents: StateFlow<List<Resident>> = firestoreManager.residents
-    val staff: StateFlow<List<Staff>> = firestoreManager.staff
+    val residents = MutableStateFlow<List<Resident>>(emptyList())
+    val staff = MutableStateFlow<List<Staff>>(emptyList())
+    val todaysMealRecords = MutableStateFlow<List<MealRecord>>(emptyList())
     val showToast = MutableStateFlow<String?>(null)
     val showConfirmDialog = MutableStateFlow<String?>(null)
     private var onConfirmAction: () -> Unit = {}
     val loggedInStaff = MutableStateFlow<Staff?>(null)
 
-    val residentPresence: StateFlow<Map<String, Boolean>> = firestoreManager.todaysMealRecords.map { records ->
-        val presenceMap = mutableMapOf<String, Boolean>()
-        records.filter { it.personType == "resident" }.forEach { record ->
-            presenceMap[record.personId] = record.mealConfirmed
-        }
-        presenceMap
+    val residentPresence: StateFlow<Map<String, Boolean>> = todaysMealRecords.map { records ->
+        records.filter { it.personType == "resident" }.associate { it.personId to it.mealConfirmed }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
+
     init {
+        fetchAllData()
+    }
+
+    private fun fetchAllData() {
         viewModelScope.launch {
-            firestoreManager.signIn(null)
-            firestoreManager.populateInitialData()
-            firestoreManager.startListeners()
+            residents.value = repository.getResidents()
+            staff.value = repository.getStaff()
+            todaysMealRecords.value = repository.getTodaysMealRecords()
         }
     }
 
     fun setPriorityId(id: Int) {
         priorityId.value = id
-        val destination = when (id) {
-            0 -> "resident_confirmation"
-            else -> "dashboard"
-        }
-        navigateTo(destination)
+        navigateTo(if (id == 0) "resident_confirmation" else "dashboard")
     }
 
     fun navigateTo(screen: String) {
@@ -325,42 +204,86 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         showConfirmDialog.value = title
     }
 
-    fun dismissConfirmDialog() {
-        showConfirmDialog.value = null
-    }
-
+    fun dismissConfirmDialog() { showConfirmDialog.value = null }
     fun onConfirm() {
         onConfirmAction()
         dismissConfirmDialog()
     }
 
     fun confirmResidentMeal(resident: Resident, eatOnSite: Boolean) = viewModelScope.launch {
-        firestoreManager.confirmResidentMeal(resident, eatOnSite)
+        repository.confirmMeal(MealRecord(
+            personId = resident.id, personType = "resident", name = resident.name, firstName = resident.firstName,
+            mealConfirmed = eatOnSite, date = "", allergies = resident.allergies,
+            mealTexture = resident.mealTexture, mealType = resident.mealType
+        ))
+        fetchAllData()
     }
 
     fun confirmStaffMeal(staff: Staff, eatOnSite: Boolean) = viewModelScope.launch {
-        firestoreManager.confirmStaffMeal(staff, eatOnSite)
-        if(eatOnSite) navigateTo("meal_summary") // Go to recap after confirming
+        repository.confirmMeal(MealRecord(
+            personId = staff.id, personType = "staff", name = staff.name, firstName = staff.firstName,
+            mealConfirmed = eatOnSite, date = ""
+        ))
+        fetchAllData()
+        if(eatOnSite) navigateTo("meal_summary")
     }
 
     fun addOrUpdateResident(resident: Resident) = viewModelScope.launch {
-        if (firestoreManager.addOrUpdateResident(resident)) showToast.value = "Résident sauvegardé."
+        repository.addOrUpdateResident(resident)
+        showToast.value = "Résident sauvegardé."
+        fetchAllData()
     }
 
     fun deleteResident(residentId: String) = viewModelScope.launch {
-        if(firestoreManager.deleteResident(residentId)) showToast.value = "Résident supprimé."
+        repository.deleteResident(residentId)
+        showToast.value = "Résident supprimé."
+        fetchAllData()
     }
 
-    fun updateResidentTexture(residentId: String, currentTexture: String, increment: Boolean) = viewModelScope.launch {
+    fun updateResidentTexture(resident: Resident, increment: Boolean) = viewModelScope.launch {
         val levels = listOf("normal", "haché", "mixé")
-        val currentIndex = levels.indexOf(currentTexture)
+        val currentIndex = levels.indexOf(resident.mealTexture)
         val newIndex = if(increment) (currentIndex + 1).coerceAtMost(levels.lastIndex) else (currentIndex - 1).coerceAtLeast(0)
         if (currentIndex != newIndex) {
-            if(firestoreManager.updateResidentTexture(residentId, levels[newIndex])) showToast.value = "Texture mise à jour."
+            val updatedResident = resident.copy(mealTexture = levels[newIndex])
+            repository.updateResident(resident.id, updatedResident)
+            showToast.value = "Texture mise à jour."
+            fetchAllData()
         }
     }
 
-    fun getMealSummary() = firestoreManager.getMealSummary()
+    fun getMealSummary(): Map<String, Any> {
+        val absentResidentIds = todaysMealRecords.value.filter { it.personType == "resident" && !it.mealConfirmed }.map { it.personId }.toSet()
+        val presentResidents = residents.value.filter { it.id !in absentResidentIds }
+        val absentResidents = residents.value.filter { it.id in absentResidentIds }
+
+        val presentStaffCount = todaysMealRecords.value.count { it.personType == "staff" && it.mealConfirmed }
+
+        val normalMeals = presentResidents
+            .filter { it.mealType == "aucun" && it.allergies.isEmpty() }
+            .groupBy { it.mealTexture }
+            .mapValues { it.value.size }
+
+        val specialMeals = presentResidents
+            .filter { it.mealType != "aucun" || it.allergies.isNotEmpty() }
+            .groupBy { it.mealType.uppercase() }
+            .mapValues { mealTypeEntry ->
+                mealTypeEntry.value
+                    .groupBy { it.allergies.sorted().joinToString(", ").ifEmpty { "Aucune" } }
+                    .mapValues { allergyEntry ->
+                        allergyEntry.value
+                            .groupBy { it.mealTexture }
+                            .mapValues { it.value.size }
+                    }
+            }
+
+        return mapOf(
+            "absentResidents" to absentResidents,
+            "presentStaffCount" to presentStaffCount,
+            "normalMeals" to normalMeals,
+            "specialMeals" to specialMeals
+        )
+    }
 }
 
 // --- 4. MainActivity ---
@@ -596,10 +519,10 @@ fun AppContent(viewModel: MainViewModel) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("Texture: ${resident.mealTexture}", modifier = Modifier.weight(1f))
                                 if (priority!! >= 2) {
-                                    IconButton(onClick = { viewModel.updateResidentTexture(resident.id, resident.mealTexture, true) }) { Icon(Icons.Default.Add, "Incrémenter texture") }
+                                    IconButton(onClick = { viewModel.updateResidentTexture(resident, true) }) { Icon(Icons.Default.Add, "Incrémenter texture") }
                                 }
                                 if (priority!! >= 3) {
-                                    IconButton(onClick = { viewModel.updateResidentTexture(resident.id, resident.mealTexture, false) }) { Icon(Icons.Default.Remove, "Décrémenter texture") }
+                                    IconButton(onClick = { viewModel.updateResidentTexture(resident, false) }) { Icon(Icons.Default.Remove, "Décrémenter texture") }
                                 }
                             }
                             if (priority!! >= 2) {

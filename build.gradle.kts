@@ -4,7 +4,7 @@ plugins {
     // Les plugins de l'application et de Kotlin, avec `apply false`
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.kotlin.android) apply false
-    alias(libs.plugins.kotlin.compose) apply false // Si vous utilisez le plugin compose au niveau du projet
+    alias(libs.plugins.kotlin.compose) apply true // Si vous utilisez le plugin compose au niveau du projet
 
     // AJOUTEZ CETTE LIGNE pour déclarer le plugin Google Services avec sa version
     id("com.google.gms.google-services") version "4.4.1" apply false // Utilisez la version la plus récente si disponible, ex: 4.4.1
