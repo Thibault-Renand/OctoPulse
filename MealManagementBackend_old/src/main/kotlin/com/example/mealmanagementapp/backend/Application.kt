@@ -4,7 +4,6 @@ package com.example.mealmanagementapp.backend
 
 import com.example.mealmanagementapp.backend.database.DatabaseFactory
 import com.example.mealmanagementapp.backend.database.dao
-import com.example.mealmanagementapp.backend.models.NewStaffRequest
 import com.example.mealmanagementapp.backend.models.MealRecord
 import com.example.mealmanagementapp.backend.models.Resident
 import io.ktor.serialization.kotlinx.json.*
@@ -21,7 +20,6 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.NetworkInterface
-import io.ktor.http.*
 
 const val DISCOVERY_PORT = 9999
 const val DISCOVERY_KEYWORD = "poulpe"
@@ -79,13 +77,7 @@ fun startDiscoveryService() {
  * Trouve la première adresse IP non-localhost de la machine.
  */
 fun getLocalIPAddress(): String? {
-    NetworkInterfaDirectBufferSize: 0
-15:02:51.034 [main] DEBUG io.netty.buffer.ByteBufUtil -- -Dio.netty.maxThreadLocalCharBufferSize: 16384
-15:02:51.035 [main] DEBUG io.netty.bootstrap.ChannelInitializerExtensions -- -Dio.netty.bootstrap.extensions: null
-15:02:51.046 [DefaultDispatcher-worker-2] INFO ktor.application -- Responding at http://0.0.0.0:8080
-
-Process finished with exit code 130 (interrupted by signal 2:SIGINT)
-ce.getNetworkInterfaces().toList().map { networkInterface ->
+    NetworkInterface.getNetworkInterfaces().toList().map { networkInterface ->
         networkInterface.inetAddresses.toList().map { inetAddress ->
             if (!inetAddress.isLoopbackAddress && inetAddress is java.net.Inet4Address) {
                 return inetAddress.hostAddress
@@ -120,13 +112,8 @@ fun Application.configureRouting() {
 
         route("/staff") {
             get { call.respond(dao.getAllStaff()) }
-            // AJOUT: Route pour créer un nouveau membre du personnel
-            post {
-                val request = call.receive<NewStaffRequest>()
-                val newStaffMember = dao.addStaff(name = request.name, firstName = request.firstName, role = "Visiteur")
-                call.respond(HttpStatusCode.Created, newStaffMember)
-            }
         }
+
         route("/meals") {
             get("/today") { call.respond(dao.getTodaysMealRecords()) }
             post {

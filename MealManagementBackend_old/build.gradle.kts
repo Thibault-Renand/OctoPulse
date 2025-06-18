@@ -1,11 +1,7 @@
-// Importation du plugin Shadow
-import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 plugins {
     kotlin("jvm") version "1.9.22"
     id("io.ktor.plugin") version "2.3.10"
     kotlin("plugin.serialization") version "1.9.22"
-    // AJOUT: Le plugin Shadow pour créer un JAR exécutable
-    id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
 group = "com.example"
@@ -13,10 +9,6 @@ version = "0.0.1"
 
 application {
     mainClass.set("com.example.mealmanagementapp.backend.ApplicationKt")
-}
-// AJOUT: Configuration de la toolchain JVM pour forcer l'utilisation de Java 21
-kotlin {
-    jvmToolchain(21)
 }
 
 repositories {
@@ -44,14 +36,4 @@ dependencies {
     // Test
     testImplementation("io.ktor:ktor-server-tests-jvm")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit")
-}
-
-// AJOUT: Configuration de la tâche ShadowJar
-tasks.withType<ShadowJar> {
-    archiveBaseName.set("MealManagementBackend")
-    archiveClassifier.set("")
-    archiveVersion.set("0.0.1")
-    manifest {
-        attributes(Pair("Main-Class", "com.example.mealmanagementapp.backend.ApplicationKt"))
-    }
 }

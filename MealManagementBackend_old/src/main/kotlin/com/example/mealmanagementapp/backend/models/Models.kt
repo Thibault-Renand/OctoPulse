@@ -22,12 +22,7 @@ data class Staff(
     val firstName: String,
     val role: String
 )
-// AJOUT: Modèle pour la requête de création de personnel
-@Serializable
-data class NewStaffRequest(
-    val name: String,
-    val firstName: String
-)
+
 @Serializable
 data class MealRecord(
     val id: Int = 0, // ID is now an Int from the DB
