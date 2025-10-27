@@ -1,19 +1,24 @@
-// app/build.gradle.kts
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
-    kotlin("kapt")
+    // Le plugin compose est activé via buildFeatures, cette ligne peut souvent être retirée
+     alias(libs.plugins.kotlin.compose)
+
+    // SUPPRESSION du plugin Google Services
+    // id("com.google.gms.google-services")
+
+    // AJOUT du plugin de sérialisation via l'alias
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
-    namespace = "com.example.myfirstapp"
-    compileSdk = 35
+    namespace = "com.example.mealmanagementapp"
+    compileSdk = 35 // Gardé comme vous l'avez défini
 
     defaultConfig {
-        applicationId = "com.example.myfirstapp"
+        applicationId = "com.example.mealmanagementapp"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 35 // Gardé comme vous l'avez défini
         versionCode = 1
         versionName = "1.0"
 
@@ -29,58 +34,58 @@ android {
             )
         }
     }
-
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_1_8 // Recommandé pour la compatibilité
+        targetCompatibility = JavaVersion.VERSION_1_8
     }
     kotlinOptions {
-        jvmTarget = "11"
+        jvmTarget = "1.8"
     }
-
     buildFeatures {
         compose = true
     }
     composeOptions {
-        kotlinCompilerExtensionVersion = "1.6.0"
+        kotlinCompilerExtensionVersion = "1.5.3"
+    }
+
+    // CORRECTION: 'packagingOptions' est renommé en 'packaging'
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
     }
 }
 
 dependencies {
-    // Core & Lifecycle
+    // SUPPRESSION des dépendances Firebase
+    // implementation(platform("com.google.firebase:firebase-bom:32.8.1"))
+    // implementation("com.google.firebase:firebase-firestore-ktx")
+    // implementation("com.google.firebase:firebase-auth-ktx")
+    // implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
+
+    // AJOUT des dépendances Ktor Client
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.android) // Utilise le moteur Android, pas CIO
+    implementation(libs.ktor.client.contentnegotiation)
+    implementation(libs.ktor.serialization.kotlinx.json)
+
+    // Dépendances AndroidX & Compose existantes
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-
-    // Compose
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.ui)                    // ui-core
+    implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
-    implementation(libs.androidx.constraintlayout)
-    implementation("androidx.compose.foundation:foundation:1.6.0")  // ← Ajouté
-    debugImplementation(libs.androidx.ui.tooling)
-    debugImplementation(libs.androidx.ui.test.manifest)
+    implementation("androidx.compose.material:material-icons-extended:1.6.7")
 
-    // ViewModel + Compose
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.1")
-
-    // Room
-    implementation("androidx.room:room-runtime:2.5.2")
-    kapt("androidx.room:room-compiler:2.5.2")
-    implementation("androidx.room:room-ktx:2.5.2")
-
-    // Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.0")
-
-    // Gson pour converters
-    implementation("com.google.code.gson:gson:2.10.1")  // ← Ajouté
-
-    // Tests
+    // Test
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.ui.test.junit4)
+    debugImplementation(libs.androidx.ui.tooling)
+    debugImplementation(libs.androidx.ui.test.manifest)
 }
